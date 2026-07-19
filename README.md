@@ -1,3 +1,9 @@
+> **⚙️ Personal fork** — patched for **Bluefin-DX / Fedora atomic, GNOME 50, Wayland**.
+> Tracks upstream v1.3.0. See
+> [`CUSTOMIZATIONS.md`](CUSTOMIZATIONS.md) for the atomic-host deltas and
+> [`INSTALL-BLUEFIN.md`](INSTALL-BLUEFIN.md) for setup. Upstream:
+> [MohammedEl-sayedAhmed/clipman](https://github.com/MohammedEl-sayedAhmed/clipman) (Apache-2.0).
+
 <div align="center">
 
 <img src="https://raw.githubusercontent.com/MohammedEl-sayedAhmed/clipman/main/docs/logo.svg" alt="Clipman logo" width="128" height="128">
