@@ -355,6 +355,13 @@ class ClipmanWindow(Adw.ApplicationWindow):
 
         # Escape closes the popup.
         key_ctrl = Gtk.EventControllerKey()
+        # Capture phase: the popup opens with the Gtk.SearchEntry focused, and
+        # SearchEntry consumes Escape itself (its internal stop-search) before
+        # a bubble-phase controller would ever see it — so Escape failed to
+        # close the popup whenever search had focus. Intercepting in the
+        # capture phase lets the window handle Escape first; every other key
+        # returns False here and still reaches the entry normally.
+        key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         key_ctrl.connect("key-pressed", self._on_key_pressed)
         self.add_controller(key_ctrl)
 
