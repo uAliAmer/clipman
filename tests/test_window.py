@@ -2017,6 +2017,365 @@ class TestRestoreFlow(_WidgetTestCase):
         self.assertGreater(db.add_entry("text", content_text="still recording"), 0)
 
 
+class TestColorButtons(_WidgetTestCase):
+    """Preferences → Appearance: the accent and font colour buttons."""
+
+    _STYLE = "clipman.preferences.Adw.StyleManager.get_default"
+
+    def _prefs(self, **settings):
+        from clipman.preferences import ClipmanPreferences
+
+        db = self._make_db()
+        for key, value in settings.items():
+            db.set_setting(key, value)
+        return db, ClipmanPreferences(db, None, on_setting_changed=None)
+
+    @staticmethod
+    def _shown(button):
+        from clipman.preferences import _rgba_hex
+
+        return _rgba_hex(button.get_rgba())
+
+    @staticmethod
+    def _style(dark):
+        style = MagicMock()
+        style.get_dark.return_value = dark
+        return style
+
+    def test_accent_reset_shows_the_default_without_saving_it(self):
+        db, prefs = self._prefs(accent_color="#ff0000")
+        self.assertEqual(self._shown(prefs._accent_btn), "#ff0000")
+        prefs._on_accent_reset(None)
+        # Showing the default fires notify::rgba; it must not be saved
+        # back as a picked colour.
+        self.assertEqual(db.get_setting("accent_color"), "default")
+        self.assertEqual(self._shown(prefs._accent_btn),
+                         prefs._default_accent_hex())
+
+    def test_font_color_reset_shows_the_default_without_saving_it(self):
+        db, prefs = self._prefs(font_color="#00ff00")
+        prefs._on_font_color_reset(None)
+        self.assertEqual(db.get_setting("font_color"), "default")
+        self.assertEqual(self._shown(prefs._font_color_btn),
+                         prefs._font_color_display_hex("default"))
+
+    def test_the_default_accent_is_the_palette_accent(self):
+        from clipman.window import _CATPPUCCIN_MOCHA, _STONE_LIGHT
+
+        _db, prefs = self._prefs(use_catppuccin="true")
+        for dark, palette in ((True, _CATPPUCCIN_MOCHA), (False, _STONE_LIGHT)):
+            with self.subTest(dark=dark), \
+                    patch(self._STYLE, return_value=self._style(dark)):
+                self.assertEqual(prefs._default_accent_hex(),
+                                 palette["accent_bg_color"])
+
+    def test_without_catppuccin_the_default_is_the_system_accent(self):
+        _db, prefs = self._prefs(use_catppuccin="false")
+        style = self._style(False)
+        accent = Gdk.RGBA()
+        accent.parse("#336699")
+        style.get_accent_color_rgba.return_value = accent
+        with patch(self._STYLE, return_value=style):
+            self.assertEqual(prefs._default_accent_hex(), "#336699")
+        # libadwaita before 1.6 has no system accent: Adwaita's blue.
+        old = MagicMock(spec=["get_dark"])
+        with patch(self._STYLE, return_value=old):
+            self.assertEqual(prefs._default_accent_hex(), "#3584e4")
+
+    def test_a_theme_change_updates_a_default_accent(self):
+        db, prefs = self._prefs(use_catppuccin="true", accent_color="default")
+        with patch(self._STYLE, return_value=self._style(False)):
+            prefs._save_theme_setting("theme", "light")
+        self.assertEqual(self._shown(prefs._accent_btn), "#2563eb")
+        self.assertEqual(db.get_setting("accent_color"), "default")
+
+    def test_a_theme_change_keeps_a_picked_accent(self):
+        db, prefs = self._prefs(accent_color="#ff0000")
+        prefs._save_theme_setting("theme", "light")
+        self.assertEqual(self._shown(prefs._accent_btn), "#ff0000")
+        self.assertEqual(db.get_setting("accent_color"), "#ff0000")
+
+    def test_picking_a_colour_saves_it(self):
+        db, prefs = self._prefs()
+        picked = Gdk.RGBA()
+        picked.parse("#123456")
+        prefs._accent_btn.set_rgba(picked)
+        self.assertEqual(db.get_setting("accent_color"), "#123456")
+
+    def test_rgba_hex_clamps_each_channel(self):
+        from clipman.preferences import _rgba_hex
+
+        rgba = Gdk.RGBA()
+        rgba.red, rgba.green, rgba.blue = 1.05, -0.1, 0.5
+        self.assertEqual(_rgba_hex(rgba), "#ff0080")
+
+
+def _find_widget(root, kind, css_class=None):
+    """The first widget of ``kind`` (with ``css_class``) under ``root``."""
+    if isinstance(root, kind) and (css_class is None
+                                   or css_class in root.get_css_classes()):
+        return root
+    child = root.get_first_child()
+    while child is not None:
+        found = _find_widget(child, kind, css_class)
+        if found is not None:
+            return found
+        child = child.get_next_sibling()
+    return None
+
+
+def _hex(rgba):
+    return "#" + "".join(
+        f"{min(255, max(0, round(c * 255))):02x}"
+        for c in (rgba.red, rgba.green, rgba.blue)
+    )
+
+
+class TestThemeAndStyle(_WidgetTestCase):
+    """Theme and stylesheet fixes from #347: UI-5, UI-22, UI-23, UI-24."""
+
+    def setUp(self):
+        super().setUp()
+        style = Adw.StyleManager.get_default()
+        self.addCleanup(style.set_color_scheme, style.get_color_scheme())
+
+    def _window(self, **settings):
+        from clipman.window import ClipmanWindow
+
+        db = self._make_db()
+        for key, value in settings.items():
+            db.set_setting(key, value)
+        app = self._make_app("com.clipman.TestTheme")
+        return db, ClipmanWindow(application=app, db=db, monitor=None)
+
+    # UI-24: the Color scheme row applies with the Catppuccin theme off.
+
+    def test_with_no_stored_scheme_the_default_depends_on_catppuccin(self):
+        _db, on = self._window(use_catppuccin="true")
+        self.assertEqual(on._theme, "dark")
+        _db, off = self._window(use_catppuccin="false")
+        self.assertEqual(off._theme, "auto")
+
+    def test_the_scheme_applies_without_catppuccin(self):
+        _db, window = self._window(use_catppuccin="false", theme="light")
+        style = Adw.StyleManager.get_default()
+        self.assertEqual(style.get_color_scheme(), Adw.ColorScheme.FORCE_LIGHT)
+        self.assertFalse(window._effective_dark())
+        window._on_setting_changed("theme", "dark")
+        self.assertEqual(style.get_color_scheme(), Adw.ColorScheme.FORCE_DARK)
+        self.assertTrue(window._effective_dark())
+
+    def test_switching_catppuccin_moves_an_unstored_scheme(self):
+        db, window = self._window()
+        self.assertEqual(window._theme, "dark")
+        db.set_setting("use_catppuccin", "false")
+        window._on_setting_changed("use_catppuccin", "false")
+        self.assertEqual(window._theme, "auto")
+        self.assertIsNone(db.get_setting("theme", None))
+
+    def test_preferences_show_the_scheme_in_effect(self):
+        from clipman.preferences import THEMES, ClipmanPreferences
+
+        db = self._make_db()
+        db.set_setting("use_catppuccin", "false")
+        prefs = ClipmanPreferences(db, None, on_setting_changed=None)
+        ids = [theme_id for theme_id, _label in THEMES]
+        self.assertEqual(ids[prefs._theme_row.get_selected()], "auto")
+        prefs._save_theme_setting("use_catppuccin", "true")
+        self.assertEqual(ids[prefs._theme_row.get_selected()], "dark")
+        # Showing the new default must not store it as a choice.
+        self.assertIsNone(db.get_setting("theme", None))
+
+    # UI-5: status-page icons take their tone colour; the page is compact.
+
+    def test_a_status_page_icon_takes_its_tone_colour(self):
+        from clipman.window import _CATPPUCCIN_MOCHA
+
+        from gi.repository import Gtk
+
+        _db, window = self._window(use_catppuccin="true", theme="dark")
+        window._show_edge_state("watcher-crashed")
+        page = _find_widget(window, Adw.StatusPage)
+        self.assertIsNotNone(page)
+        self.assertIn("compact", page.get_css_classes())
+        icon = _find_widget(page, Gtk.Image, "icon")
+        self.assertIsNotNone(icon)
+        self.assertEqual(_hex(icon.get_color()), _CATPPUCCIN_MOCHA["error_color"])
+
+    # UI-22: the Font size setting scales clip rows only.
+
+    def test_font_size_scales_clip_rows_only(self):
+        from string import Template
+
+        css = (Path(__file__).resolve().parent.parent
+               / "clipman" / "style.css").read_text()
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        # Fill the markers as the window does, with a value easy to find.
+        css = Template(css).safe_substitute(font_size="SETTING")
+        blocks = {
+            selector.strip(): body
+            for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", css)
+        }
+        self.assertIn("font-size: 12px", blocks[".clipman-window"])
+        self.assertIn("font-size: SETTINGpx", blocks[".clip-row"])
+        self.assertEqual(css.count("SETTING"), 1)
+
+    def test_the_popup_paints_its_own_header_ring_and_tabs(self):
+        """UI-3: Ubuntu's Yaru theme fixes libadwaita's colour variables,
+        so the popup paints its header, search ring and tabs itself."""
+        from string import Template
+
+        css = (Path(__file__).resolve().parent.parent
+               / "clipman" / "style.css").read_text()
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        css = Template(css).safe_substitute(font_size="12", font_color="#000000")
+        blocks = {
+            " ".join(selector.split()): body
+            for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", css)
+        }
+        top_bar = blocks[".clipman-window toolbarview > .top-bar, "
+                         ".clipman-window toolbarview > .top-bar headerbar"]
+        self.assertIn("background-color: @headerbar_bg_color", top_bar)
+        self.assertIn("background-image: none", top_bar)
+        self.assertIn("outline-color:", blocks[".clipman-search:focus-within"])
+        self.assertIn("background-image: none", blocks[".filter-tab"])
+
+    # UI-23: square thumbnails, cut from the middle.
+
+    def test_cover_size_keeps_the_short_side(self):
+        from clipman.window import _cover_size
+
+        self.assertEqual(_cover_size(400, 100, 96), (384, 96))
+        self.assertEqual(_cover_size(100, 400, 96), (96, 384))
+        self.assertEqual(_cover_size(30, 30, 96), (96, 96))
+        # A long panorama: the long side is capped at four times the box.
+        self.assertEqual(_cover_size(4000, 100, 96), (384, 10))
+
+    def test_center_square_is_the_middle(self):
+        from gi.repository import GdkPixbuf
+
+        from clipman.window import _center_square
+
+        wide = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 30, 10)
+        wide.fill(0xFF0000FF)
+        wide.new_subpixbuf(10, 0, 10, 10).fill(0x00FF00FF)
+        square = _center_square(wide)
+        self.assertEqual((square.get_width(), square.get_height()), (10, 10))
+        pixels = square.get_pixels()
+        stride, channels = square.get_rowstride(), square.get_n_channels()
+        for x, y in ((0, 0), (9, 0), (0, 9), (9, 9), (5, 5)):
+            offset = y * stride + x * channels
+            self.assertEqual(tuple(pixels[offset:offset + 3]), (0, 255, 0))
+
+    def test_wide_and_tall_images_get_square_thumbnails(self):
+        from gi.repository import GdkPixbuf
+
+        db, window = self._window()
+        for width, height in ((400, 100), (100, 400)):
+            image = GdkPixbuf.Pixbuf.new(
+                GdkPixbuf.Colorspace.RGB, False, 8, width, height
+            )
+            image.fill(0x3366FFFF)
+            _ok, data = image.save_to_bufferv("png", [], [])
+            db.add_entry("image", image_data=bytes(data))
+        for entry in db.get_entries(limit=2):
+            with self.subTest(path=entry["image_path"]):
+                texture = window._thumbnail_texture(entry["image_path"])
+                self.assertIsNotNone(texture)
+                self.assertEqual(texture.get_width(), texture.get_height())
+
+
+@unittest.skipUnless(_HAS_GTK, "GTK 4 + libadwaita not available")
+class TestPalette(unittest.TestCase):
+    """The palettes keep 4.5:1 for text (UI-4) and mirror the design
+    tokens in docs/design/tokens.css (UI-30)."""
+
+    @staticmethod
+    def _rgb(color):
+        return tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+    def _contrast(self, fg, bg):
+        def lum(rgb):
+            r, g, b = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                       for c in rgb)
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        high, low = sorted((lum(fg), lum(bg)), reverse=True)
+        return (high + 0.05) / (low + 0.05)
+
+    def _tint(self, color, alpha, base):
+        """``color`` at ``alpha`` over ``base``, as style.css draws pills."""
+        fg, bg = self._rgb(color), self._rgb(base)
+        return tuple(f * alpha + b * (1 - alpha) for f, b in zip(fg, bg))
+
+    def _palettes(self):
+        from clipman import window
+
+        return {
+            "dark": (window._CATPPUCCIN_MOCHA, window._DIM_TEXT_DARK,
+                     window._INCOGNITO_DARK),
+            "light": (window._STONE_LIGHT, window._DIM_TEXT_LIGHT,
+                      window._INCOGNITO_LIGHT),
+        }
+
+    def test_text_keeps_4_5_to_1(self):
+        for name, (p, dim, incognito) in self._palettes().items():
+            rgb = self._rgb
+            pairs = {
+                "status page text": (rgb(dim), rgb(p["window_bg_color"])),
+                "clip subtitle": (rgb(dim), rgb(p["card_bg_color"])),
+                "Recording pill": (rgb(p["success_color"]),
+                                   self._tint(p["success_color"], 0.14,
+                                              p["headerbar_bg_color"])),
+                "Paused pill": (rgb(incognito),
+                                self._tint(incognito, 0.16,
+                                           p["headerbar_bg_color"])),
+                "Clear all": (rgb(p["error_color"]), rgb(p["headerbar_bg_color"])),
+                "count badge": (rgb(p["accent_color"]),
+                                self._tint(p["accent_color"], 0.15,
+                                           p["card_bg_color"])),
+                "banner action": (rgb(p["accent_color"]),
+                                  self._tint(p["accent_color"], 0.10,
+                                             p["window_bg_color"])),
+                "warning banner action": (rgb(p["warning_color"]),
+                                          self._tint(p["warning_color"], 0.12,
+                                                     p["window_bg_color"])),
+                "error banner action": (rgb(p["error_color"]),
+                                        self._tint(p["error_color"], 0.12,
+                                                   p["window_bg_color"])),
+            }
+            for what, (fg, bg) in pairs.items():
+                with self.subTest(palette=name, pair=what):
+                    self.assertGreaterEqual(self._contrast(fg, bg), 4.5)
+
+    def test_palettes_mirror_the_design_tokens(self):
+        tokens_css = (Path(__file__).resolve().parent.parent
+                      / "docs" / "design" / "tokens.css").read_text()
+
+        def tokens(selector):
+            body = tokens_css.split(selector, 1)[1].split("}", 1)[0]
+            return dict(re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", body))
+
+        mirror = {
+            "window_bg_color": "--bg-base",
+            "headerbar_bg_color": "--bg-mantle",
+            "card_bg_color": "--bg-surface",
+            "window_fg_color": "--fg-text",
+            "accent_bg_color": "--accent",
+            "success_color": "--success",
+            "warning_color": "--warning",
+            "error_color": "--error",
+        }
+        selectors = {"dark": "body.theme-dark {",
+                     "light": ":root, body.theme-light {"}
+        for name, (palette, _dim, incognito) in self._palettes().items():
+            design = tokens(selectors[name])
+            for key, token in mirror.items():
+                with self.subTest(palette=name, token=token):
+                    self.assertEqual(palette[key].lower(), design[token].lower())
+            with self.subTest(palette=name, token="--incognito"):
+                self.assertEqual(incognito.lower(), design["--incognito"].lower())
+
+
 class TestEdgeStateDeclaration(unittest.TestCase):
     """Module-level invariants of edge_states.py that don't need GTK.
 

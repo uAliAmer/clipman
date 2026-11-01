@@ -36,6 +36,22 @@ All notable changes to Clipman are documented in this file.
   checks that the files are up to date, that every label fits its box,
   and that text and lines keep the project's contrast rules.
 
+### Changed — the website's screenshots
+
+- The screenshots on the website are made again from the current design
+  pages. The old ones dated from June: three light ones showed "Dark"
+  selected in the theme toggle, and the edge-states picker showed 15
+  states instead of 17. `scripts/design-screenshots.py` now makes them,
+  and checks each page's theme toggle before it saves a picture. The 18
+  screenshots the website did not use are gone.
+
+### Changed — the incognito design shows the footer pill
+
+- The design mockup and the website showed an "Incognito is on" banner
+  that the app has not had since July: the eye in the header and the
+  footer's Paused pill show incognito instead. The mockup, its
+  screenshots and the website's live demo now show what the app does.
+
 ### Fixed — release notes on GitHub Releases
 
 - The v1.3.0 GitHub Release was published without its notes. GitHub
@@ -44,6 +60,50 @@ All notable changes to Clipman are documented in this file.
   to a file with `scripts/release-notes.py`, and pre-flight stops a
   release whose CHANGELOG has no notes before anything is published.
   The v1.3.0 notes were put back by hand.
+
+### Fixed — the Shortcuts page described the shortcut wrongly
+
+- Preferences → Shortcuts said the GNOME Shell extension binds the
+  shortcut and that a change applies on the next daemon restart. Neither
+  is true: it is a GNOME custom shortcut. The page now says where to
+  find it, and that Change… can edit it but not create it
+  ([#283](https://github.com/MohammedEl-sayedAhmed/clipman/issues/283),
+  [#334](https://github.com/MohammedEl-sayedAhmed/clipman/issues/334)).
+  The design mockup said the same and is fixed too.
+
+### Fixed — the colour buttons in Preferences
+
+- After a reset, the accent and font colour buttons kept showing the
+  old colour. They now show the default at once. The accent button
+  also showed mauve for the default whatever the theme; it now shows
+  the accent the popup really uses: the Catppuccin or stone accent, or
+  your system accent when the Catppuccin theme is off. It follows a
+  change of theme while Preferences is open.
+
+### Fixed — theme and layout details
+
+- The Font size setting scales the clip rows only, as Preferences says;
+  the header, search box, tabs and footer keep their size.
+- Image thumbnails are square. A wide or tall image is cut to its
+  middle, so its text lines up with the other rows.
+- With the Catppuccin theme off, the Color scheme choice applies (dark,
+  light or follow system), with your GNOME theme's colours. If you never
+  picked a scheme, it still follows the system.
+- Light-theme text that was below the 4.5:1 contrast ratio is darker:
+  the Recording and Paused pills, Clear all, the active count badge,
+  banner actions and status-page text (`docs/design/tokens.css` too).
+- Status-page icons are 48 px and take their tone's colour; the CSS
+  selector never matched before. Status pages use libadwaita's compact
+  layout, so their buttons stay above the footer on a 768 px screen.
+- Dark-theme cards use the design token's colour (`#252536`).
+
+### Fixed — the popup on Ubuntu's Yaru theme
+
+- With Ubuntu's Yaru theme, the popup's header bar was Yaru grey, the
+  search box's focus ring Yaru blue, and the filter tabs had grey
+  chips, whatever Clipman's theme. The popup now paints these itself,
+  so they follow the Catppuccin or stone palette and your accent.
+  Preferences and dialogs still use Yaru's switches and cards.
 
 ## [1.3.0] - 2026-10-12
 

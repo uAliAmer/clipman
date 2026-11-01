@@ -116,6 +116,17 @@ EVENT_KEYS = frozenset({
     "restore_failed",
 })
 
+# Adwaita's accent before libadwaita 1.6, which has no system accent.
+_ADWAITA_BLUE = "#3584e4"
+
+
+def _rgba_hex(rgba):
+    """``#rrggbb`` for a Gdk.RGBA, each channel clamped to 0-255."""
+    return "#" + "".join(
+        f"{min(255, max(0, round(channel * 255))):02x}"
+        for channel in (rgba.red, rgba.green, rgba.blue)
+    )
+
 
 class ClipmanPreferences(Adw.Dialog):
     """Six-pane preferences dialog with a left sidebar.
@@ -312,17 +323,16 @@ class ClipmanPreferences(Adw.Dialog):
         theme_row = Adw.ComboRow()
         theme_row.set_title(_("Color scheme"))
         theme_row.set_subtitle(
-            _("Dark uses Catppuccin Mocha; Light uses warm stone.")
+            _("With the Catppuccin theme, dark is Catppuccin Mocha and "
+              "light is warm stone.")
         )
         theme_row.set_model(theme_model)
-        current_theme = self.db.get_setting("theme", "dark")
         theme_ids = [tid for tid, _label in THEMES]
-        theme_row.set_selected(
-            theme_ids.index(current_theme) if current_theme in theme_ids else 1
-        )
-        theme_row.connect(
+        theme_row.set_selected(theme_ids.index(self._current_theme()))
+        self._theme_row = theme_row
+        self._theme_handler = theme_row.connect(
             "notify::selected",
-            lambda row, _pspec: self._save(
+            lambda row, _pspec: self._save_theme_setting(
                 "theme", theme_ids[row.get_selected()]
             ),
         )
@@ -331,12 +341,12 @@ class ClipmanPreferences(Adw.Dialog):
         catppuccin_row = Adw.SwitchRow()
         catppuccin_row.set_title(_("Catppuccin theme"))
         catppuccin_row.set_subtitle(
-            _("Off: follow your system GNOME theme and accent color.")
+            _("Off: use the colours and accent of your GNOME theme.")
         )
         catppuccin_row.set_active(self._get_bool("use_catppuccin", True))
         catppuccin_row.connect(
             "notify::active",
-            lambda row, _pspec: self._save(
+            lambda row, _pspec: self._save_theme_setting(
                 "use_catppuccin", "true" if row.get_active() else "false"
             ),
         )
@@ -369,7 +379,9 @@ class ClipmanPreferences(Adw.Dialog):
         argba = Gdk.RGBA()
         argba.parse(self._accent_display_hex(cur_accent))
         self._accent_btn.set_rgba(argba)
-        self._accent_btn.connect("notify::rgba", self._on_accent_rgba)
+        self._accent_handler = self._accent_btn.connect(
+            "notify::rgba", self._on_accent_rgba
+        )
         accent_reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
         accent_reset.set_tooltip_text(_("Reset to theme default"))
         accent_reset.add_css_class("flat")
@@ -396,7 +408,7 @@ class ClipmanPreferences(Adw.Dialog):
         rgba = Gdk.RGBA()
         rgba.parse(self._font_color_display_hex(current_font_color))
         self._font_color_btn.set_rgba(rgba)
-        self._font_color_btn.connect(
+        self._font_color_handler = self._font_color_btn.connect(
             "notify::rgba", self._on_font_color_rgba
         )
 
@@ -457,23 +469,69 @@ class ClipmanPreferences(Adw.Dialog):
         return page
 
     def _accent_display_hex(self, value):
-        """Hex to show in the accent button (custom hex, or the Catppuccin
-        mauve default so the button isn't blank)."""
+        """Hex to show in the accent button: the picked colour, or the
+        accent the popup uses when none is picked."""
         if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
             return value
-        return "#cba6f7"
+        return self._default_accent_hex()
+
+    def _default_accent_hex(self):
+        """The accent the popup uses when the user has not picked one."""
+        style = Adw.StyleManager.get_default()
+        if self._get_bool("use_catppuccin", True):
+            # Imported here because window.py imports this module.
+            from clipman.window import _CATPPUCCIN_MOCHA, _STONE_LIGHT
+
+            palette = _CATPPUCCIN_MOCHA if style.get_dark() else _STONE_LIGHT
+            return palette["accent_bg_color"]
+        get_accent = getattr(style, "get_accent_color_rgba", None)
+        if get_accent is None:
+            return _ADWAITA_BLUE
+        return _rgba_hex(get_accent())
+
+    @staticmethod
+    def _show_color(button, handler_id, hex_value):
+        """Show a colour in a button without saving it as a choice."""
+        rgba = Gdk.RGBA()
+        rgba.parse(hex_value)
+        button.handler_block(handler_id)
+        try:
+            button.set_rgba(rgba)
+        finally:
+            button.handler_unblock(handler_id)
+
+    def _current_theme(self):
+        """The Color scheme in effect, as window.py resolves it: with no
+        stored choice, dark with the Catppuccin theme, else the system's."""
+        default = "dark" if self._get_bool("use_catppuccin", True) else "auto"
+        value = self.db.get_setting("theme", None) or default
+        return value if value in [tid for tid, _label in THEMES] else default
+
+    def _save_theme_setting(self, key, value):
+        """Save the theme or Catppuccin switch. Both change the default
+        accent, so a button that shows the default shows the new one."""
+        self._save(key, value)
+        if key == "use_catppuccin" and self.db.get_setting("theme", None) is None:
+            # No stored scheme: its default follows this switch.
+            theme_ids = [tid for tid, _label in THEMES]
+            self._theme_row.handler_block(self._theme_handler)
+            try:
+                self._theme_row.set_selected(
+                    theme_ids.index(self._current_theme())
+                )
+            finally:
+                self._theme_row.handler_unblock(self._theme_handler)
+        if self.db.get_setting("accent_color", "default") == "default":
+            self._show_color(self._accent_btn, self._accent_handler,
+                             self._default_accent_hex())
 
     def _on_accent_rgba(self, button, _pspec):
-        rgba = button.get_rgba()
-        hex_value = "#{:02x}{:02x}{:02x}".format(
-            round(rgba.red * 255),
-            round(rgba.green * 255),
-            round(rgba.blue * 255),
-        )
-        self._save("accent_color", hex_value)
+        self._save("accent_color", _rgba_hex(button.get_rgba()))
 
     def _on_accent_reset(self, _button):
         self._save("accent_color", "default")
+        self._show_color(self._accent_btn, self._accent_handler,
+                         self._default_accent_hex())
 
     def _font_color_display_hex(self, value):
         """Resolve a stored font_color (hex, legacy preset id, or
@@ -487,16 +545,12 @@ class ClipmanPreferences(Adw.Dialog):
         return "#9e9e9e"
 
     def _on_font_color_rgba(self, button, _pspec):
-        rgba = button.get_rgba()
-        hex_value = "#{:02x}{:02x}{:02x}".format(
-            round(rgba.red * 255),
-            round(rgba.green * 255),
-            round(rgba.blue * 255),
-        )
-        self._save("font_color", hex_value)
+        self._save("font_color", _rgba_hex(button.get_rgba()))
 
     def _on_font_color_reset(self, _button):
         self._save("font_color", "default")
+        self._show_color(self._font_color_btn, self._font_color_handler,
+                         self._font_color_display_hex("default"))
 
     # ------------------------------------------------------------------
     # Pane 2: Privacy
@@ -603,8 +657,10 @@ class ClipmanPreferences(Adw.Dialog):
         global_group = Adw.PreferencesGroup()
         global_group.set_title(_("Global shortcut"))
         global_group.set_description(
-            _("Bound through the GNOME Shell extension. Changes apply on next "
-              "daemon restart.")
+            _("A GNOME custom shortcut, found in Settings → Keyboard → View "
+              "and Customize Shortcuts → Custom Shortcuts. This page can "
+              "change it but not create it, so if Clipman is not in that "
+              "list yet, add it there first.")
         )
 
         self._toggle_row = Adw.ActionRow()
